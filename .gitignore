@@ -1,0 +1,21 @@
+# build output
+build/
+*.exe
+*.o
+*.res
+*.log
+
+# local test environment
+.venv/
+__pycache__/
+*.pyc
+
+# generated test output
+testdata/gui_out/
+testout/
+
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
