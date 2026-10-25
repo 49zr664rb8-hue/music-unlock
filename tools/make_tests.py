@@ -82,19 +82,23 @@ def kgm_encrypt(data, filekey, is_vpr=False):
     return bytes(out)
 
 
-def rc4_keybox(key):
+def ncm_keystream(key):
+    """NetEase keystream: ordinary RC4 KSA, but the byte is read straight out
+    of the key box instead of using the RC4 PRGA:
+        j = (i + 1) & 0xff
+        ks[i] = S[(S[j] + S[(S[j] + j) & 0xff]) & 0xff]
+    """
     s = list(range(256))
     j = 0
     for i in range(256):
         j = (j + s[i] + key[i % len(key)]) & 0xFF
         s[i], s[j] = s[j], s[i]
-    a = b = 0
     ks = []
-    for _ in range(256):
-        a = (a + 1) & 0xFF
-        b = (b + s[a]) & 0xFF
-        s[a], s[b] = s[b], s[a]
-        ks.append(s[(s[a] + s[b]) & 0xFF])
+    for i in range(256):
+        jj = (i + 1) & 0xFF
+        a = s[jj]
+        b = s[(a + jj) & 0xFF]
+        ks.append(s[(a + b) & 0xFF])
     return bytes(ks)
 
 
@@ -117,7 +121,7 @@ def build_ncm(mp3, meta, cover):
     else:
         mblob = b""
 
-    ks = rc4_keybox(rc4key)
+    ks = ncm_keystream(rc4key)
     audio = bytes(b ^ ks[i % 256] for i, b in enumerate(mp3))
 
     out = bytearray()

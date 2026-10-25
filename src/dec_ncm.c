@@ -48,59 +48,45 @@ static void utf8_to_w(const char *s, wchar_t *out, size_t cch)
     out[cch - 1] = 0;
 }
 
-/* ---------- RC4 keystream ---------- */
+/* ---------- NetEase keystream ----------
+ *
+ * The key schedule is the ordinary RC4 KSA, but the keystream is NOT the RC4
+ * PRGA. NetEase derives each byte straight from the key box:
+ *
+ *     j      = (i + 1) & 0xff
+ *     ks[i]  = S[(S[j] + S[(S[j] + j) & 0xff]) & 0xff]
+ *
+ * It is periodic with a period of 256, so the byte can be computed from the
+ * absolute audio offset. Using the real RC4 PRGA here produces noise.
+ */
 
 typedef struct {
-    int mode;              /* 0 = repeat 256-byte box, 1 = continuous stream */
     unsigned char box[256];
-    unsigned char keybox[256];
-    int a, b;
 } Ks;
 
-static void ks_init(Ks *k, const unsigned char *key, int klen, int mode)
+static void ks_init(Ks *k, const unsigned char *key, int klen)
 {
     int i, j = 0;
-    unsigned char s[256];
 
-    memset(k, 0, sizeof(*k));
-    k->mode = mode;
     for (i = 0; i < 256; i++)
-        s[i] = (unsigned char)i;
+        k->box[i] = (unsigned char)i;
     for (i = 0; i < 256; i++) {
-        j = (j + s[i] + key[i % klen]) & 0xff;
+        j = (j + k->box[i] + key[i % klen]) & 0xff;
         {
-            unsigned char t = s[i];
-            s[i] = s[j];
-            s[j] = t;
+            unsigned char t = k->box[i];
+            k->box[i] = k->box[j];
+            k->box[j] = t;
         }
-    }
-    memcpy(k->box, s, 256);
-
-    if (mode == 0) {
-        int a = 0, b = 0;
-        for (i = 0; i < 256; i++) {
-            unsigned char t;
-            a = (a + 1) & 0xff;
-            b = (b + s[a]) & 0xff;
-            t = s[a]; s[a] = s[b]; s[b] = t;
-            k->keybox[i] = s[(s[a] + s[b]) & 0xff];
-        }
-        memcpy(k->box, s, 256);
     }
 }
 
-static unsigned char ks_next(Ks *k, size_t i)
+static unsigned char ks_byte(const Ks *k, size_t i)
 {
-    if (k->mode == 0)
-        return k->keybox[i & 255];
-    k->a = (k->a + 1) & 0xff;
-    k->b = (k->b + k->box[k->a]) & 0xff;
-    {
-        unsigned char t = k->box[k->a];
-        k->box[k->a] = k->box[k->b];
-        k->box[k->b] = t;
-    }
-    return k->box[(k->box[k->a] + k->box[k->b]) & 0xff];
+    unsigned j = (unsigned)((i + 1) & 0xff);
+    unsigned a = k->box[j];
+    unsigned b = k->box[(a + j) & 0xff];
+
+    return k->box[(a + b) & 0xff];
 }
 
 /* ---------- PKCS#7 ---------- */
@@ -235,7 +221,7 @@ static void parse_meta_json(const char *json, MuMeta *meta)
 /* ---------- audio pass ---------- */
 
 static int decrypt_audio(FILE *f, long long audio_off, const unsigned char *key, int klen,
-                         int mode, const wchar_t *out, MuFormat *fmt, wchar_t *err, size_t cch)
+                         const wchar_t *out, MuFormat *fmt, wchar_t *err, size_t cch)
 {
     Ks ks;
     FILE *o;
@@ -263,12 +249,12 @@ static int decrypt_audio(FILE *f, long long audio_off, const unsigned char *key,
         return 0;
     }
 
-    ks_init(&ks, key, klen, mode);
+    ks_init(&ks, key, klen);
 
     while ((got = fread(buf, 1, 1 << 16, f)) > 0) {
         size_t i;
         for (i = 0; i < got; i++)
-            buf[i] ^= ks_next(&ks, idx + i);
+            buf[i] ^= ks_byte(&ks, idx + i);
         if (headlen < sizeof(head)) {
             size_t need = sizeof(head) - headlen;
             size_t take = got < need ? got : need;
@@ -450,15 +436,9 @@ int mu_dec_ncm(const wchar_t *in, const wchar_t *out, MuMeta *meta,
 
     audio_off = _ftelli64(f);
 
-    ok = decrypt_audio(f, audio_off, rc4key, rklen, 0, out, &fmt, tmp_err, 256);
+    ok = decrypt_audio(f, audio_off, rc4key, rklen, out, &fmt, tmp_err, 256);
     if (!ok)
-        ok = decrypt_audio(f, audio_off, rc4key, rklen, 1, out, &fmt, tmp_err, 256);
-    if (!ok) {
-        /* The key was recovered, so this is not a corrupt file: the audio layer
-         * itself uses an algorithm we do not implement. */
-        swprintf(err, cch,
-                 L"密钥已解出，但音频段不是已知算法（新版 NCM 变体，暂不支持）");
-    }
+        swprintf(err, cch, L"%s", tmp_err);
 
     fclose(f);
     free(keybuf);
