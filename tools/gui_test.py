@@ -29,8 +29,13 @@ def main():
     if os.path.isdir(OUT):
         shutil.rmtree(OUT)
 
-    args = [os.path.join(ROOT, "MusicUnlock.exe"), "-o", OUT]
-    args += [os.path.join(ROOT, "testdata", f) for f in FILES]
+    # optional: pass explicit files on the command line
+    if len(sys.argv) > 1:
+        files = [os.path.abspath(a) for a in sys.argv[1:]]
+    else:
+        files = [os.path.join(ROOT, "testdata", f) for f in FILES]
+
+    args = [os.path.join(ROOT, "MusicUnlock.exe"), "-o", OUT] + files
     proc = subprocess.Popen(args)
 
     hwnd = None

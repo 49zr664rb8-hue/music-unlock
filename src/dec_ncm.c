@@ -422,13 +422,26 @@ int mu_dec_ncm(const wchar_t *in, const wchar_t *out, MuMeta *meta,
     }
     imglen = rd32(hdr);
     if (imglen > 0 && imglen < (32u << 20)) {
-        unsigned char *img = (unsigned char *)malloc(imglen);
-        if (img) {
-            if (fread(img, 1, imglen, f) == imglen) {
-                meta->cover = img;
-                meta->cover_len = imglen;
-            } else {
-                free(img);
+        /* Client builds from 3.x wrap the picture in its own 4-byte length
+         * field, so the payload starts 4 bytes later than the classic layout.
+         * Detect it instead of guessing: only skip when the value matches. */
+        unsigned char peek[4];
+        long long save = _ftelli64(f);
+
+        if (fread(peek, 1, 4, f) == 4 && rd32(peek) == imglen) {
+            /* redundant length consumed */
+        } else if (save >= 0) {
+            _fseeki64(f, save, SEEK_SET);
+        }
+        {
+            unsigned char *img = (unsigned char *)malloc(imglen);
+            if (img) {
+                if (fread(img, 1, imglen, f) == imglen) {
+                    meta->cover = img;
+                    meta->cover_len = imglen;
+                } else {
+                    free(img);
+                }
             }
         }
     } else if (imglen != 0) {
@@ -440,8 +453,12 @@ int mu_dec_ncm(const wchar_t *in, const wchar_t *out, MuMeta *meta,
     ok = decrypt_audio(f, audio_off, rc4key, rklen, 0, out, &fmt, tmp_err, 256);
     if (!ok)
         ok = decrypt_audio(f, audio_off, rc4key, rklen, 1, out, &fmt, tmp_err, 256);
-    if (!ok)
-        swprintf(err, cch, L"%s", tmp_err);
+    if (!ok) {
+        /* The key was recovered, so this is not a corrupt file: the audio layer
+         * itself uses an algorithm we do not implement. */
+        swprintf(err, cch,
+                 L"密钥已解出，但音频段不是已知算法（新版 NCM 变体，暂不支持）");
+    }
 
     fclose(f);
     free(keybuf);

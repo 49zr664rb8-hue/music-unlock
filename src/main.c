@@ -789,7 +789,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
         }
         if (added > 0) {
             refresh_list();
-            set_path_label();
             {
                 wchar_t m[128];
                 _snwprintf(m, 128, L"已载入 %d 个文件，点“开始转换”即可", added);
@@ -797,6 +796,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
                 set_status(m);
             }
         }
+        set_path_label();
     }
 
     ShowWindow(hwnd, show);
